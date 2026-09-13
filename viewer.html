@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>遠隔カメラ - 視聴側</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2029;
+    --accent: #5fb3a3;
+    --text: #e8eaed;
+    --sub: #8b93a1;
+    --danger: #d9756a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Hiragino Sans", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  p.lead {
+    color: var(--sub);
+    font-size: 13px;
+    margin: 0 0 24px;
+    text-align: center;
+    max-width: 320px;
+    line-height: 1.6;
+  }
+  .panel {
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 20px;
+    width: 100%;
+    max-width: 380px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    color: var(--sub);
+    margin-bottom: 6px;
+  }
+  input {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #333a47;
+    background: #0f1216;
+    color: var(--text);
+    font-size: 15px;
+    margin-bottom: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    border-radius: 8px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--accent);
+    color: #0f1216;
+  }
+  video {
+    width: 100%;
+    border-radius: 10px;
+    margin-top: 16px;
+    background: #000;
+    display: none;
+  }
+  .status {
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--sub);
+    line-height: 1.6;
+  }
+  .status .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--sub);
+    margin-right: 6px;
+  }
+  .status.live .dot { background: var(--accent); }
+  .status.error .dot { background: var(--danger); }
+</style>
+</head>
+<body>
+  <h1>遠隔カメラ視聴</h1>
+  <p class="lead">配信側で表示されている合言葉を入力して接続してください。</p>
+
+  <div class="panel">
+    <label for="roomId">合言葉</label>
+    <input id="roomId" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="room-xxxxxxxx">
+    <button id="connectBtn">接続する</button>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div class="status" id="status"><span class="dot"></span>未接続</div>
+  </div>
+
+<script>
+  const roomIdInput = document.getElementById('roomId');
+  const connectBtn = document.getElementById('connectBtn');
+  const remoteVideo = document.getElementById('remoteVideo');
+  const statusEl = document.getElementById('status');
+
+  const ICE_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+    ]
+  };
+
+  function setStatus(text, cls) {
+    statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    statusEl.innerHTML = '<span class="dot"></span>' + text;
+  }
+
+  let peer = null;
+
+  function connect() {
+    const roomId = roomIdInput.value.trim();
+    if (!roomId) { setStatus('合言葉を入力してください', 'error'); return; }
+
+    setStatus('接続中...');
+    connectBtn.disabled = true;
+
+    peer = new Peer(undefined, { config: ICE_CONFIG });
+
+    peer.on('open', () => {
+      const call = peer.call(roomId, new MediaStream());
+      call.on('stream', (remoteStream) => {
+        remoteVideo.srcObject = remoteStream;
+        remoteVideo.style.display = 'block';
+        setStatus('視聴中', 'live');
+      });
+      call.on('close', () => setStatus('配信が終了しました', 'error'));
+      call.on('error', (e) => setStatus('接続エラー: ' + e, 'error'));
+    });
+
+    peer.on('error', (err) => {
+      setStatus('エラー: ' + err.type + '(合言葉が違うか、配信側が起動していない可能性があります)', 'error');
+      connectBtn.disabled = false;
+    });
+  }
+
+  connectBtn.addEventListener('click', connect);
+</script>
+</body>
+</html>

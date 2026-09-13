@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>遠隔カメラ - 配信側</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2029;
+    --accent: #5fb3a3;
+    --text: #e8eaed;
+    --sub: #8b93a1;
+    --danger: #d9756a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Hiragino Sans", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0 0 4px;
+  }
+  p.lead {
+    color: var(--sub);
+    font-size: 13px;
+    margin: 0 0 24px;
+    text-align: center;
+    max-width: 320px;
+    line-height: 1.6;
+  }
+  .panel {
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 20px;
+    width: 100%;
+    max-width: 380px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    color: var(--sub);
+    margin-bottom: 6px;
+  }
+  input, select {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #333a47;
+    background: #0f1216;
+    color: var(--text);
+    font-size: 15px;
+    margin-bottom: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    border-radius: 8px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #startBtn { background: var(--accent); color: #0f1216; }
+  #stopBtn { background: var(--danger); color: #0f1216; display: none; }
+  video {
+    width: 100%;
+    border-radius: 10px;
+    margin-top: 16px;
+    background: #000;
+    display: none;
+  }
+  .status {
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--sub);
+    line-height: 1.6;
+  }
+  .status .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--sub);
+    margin-right: 6px;
+  }
+  .status.live .dot { background: var(--accent); }
+  .status.error .dot { background: var(--danger); }
+  .warn {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--sub);
+    background: #0f1216;
+    border-radius: 8px;
+    padding: 12px;
+    line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+  <h1>遠隔カメラ配信</h1>
+  <p class="lead">この画面を開いたままにすると、下の合言葉を知っている人が外部から映像を見られます。</p>
+
+  <div class="panel">
+    <label for="roomId">合言葉(共有するID)</label>
+    <input id="roomId" type="text" spellcheck="false" autocapitalize="off" autocorrect="off">
+
+    <label for="facing">カメラ</label>
+    <select id="facing">
+      <option value="environment">背面(部屋を映す)</option>
+      <option value="user">前面(自撮り側)</option>
+    </select>
+
+    <button id="startBtn">配信を開始</button>
+    <button id="stopBtn">配信を停止</button>
+
+    <video id="preview" autoplay playsinline muted></video>
+
+    <div class="status" id="status"><span class="dot"></span>未開始</div>
+  </div>
+
+  <div class="warn">
+    ・この画面は必ずSafariの前面(フォアグラウンド)に表示したまま、画面ロックさせないでください。<br>
+    ・「設定 → 画面表示と明るさ → 自動ロック → なし」にし、給電しながら置いておくのがおすすめです。<br>
+    ・合言葉は他人に推測されにくい文字列にしてください(これが実質的なパスワードです)。
+  </div>
+
+<script>
+  const roomIdInput = document.getElementById('roomId');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const preview = document.getElementById('preview');
+  const statusEl = document.getElementById('status');
+  const facingSelect = document.getElementById('facing');
+
+  // ランダムな合言葉を初期表示(必要なら書き換えてOK)
+  roomIdInput.value = 'room-' + Math.random().toString(36).slice(2, 10);
+
+  let peer = null;
+  let localStream = null;
+
+  const ICE_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      // STUNだけで繋がらない場合はTURNを追加(無料デモ枠・混雑あり)
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+    ]
+  };
+
+  function setStatus(text, cls) {
+    statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    statusEl.innerHTML = '<span class="dot"></span>' + text;
+  }
+
+  async function start() {
+    const roomId = roomIdInput.value.trim();
+    if (!roomId) { setStatus('合言葉を入力してください', 'error'); return; }
+
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facingSelect.value },
+        audio: true
+      });
+    } catch (e) {
+      setStatus('カメラ/マイクの許可が必要です: ' + e.message, 'error');
+      return;
+    }
+
+    preview.srcObject = localStream;
+    preview.style.display = 'block';
+
+    peer = new Peer(roomId, { config: ICE_CONFIG });
+
+    peer.on('open', () => {
+      setStatus('待機中(合言葉: ' + roomId + ')', 'live');
+    });
+
+    peer.on('call', (call) => {
+      call.answer(localStream);
+      setStatus('接続中: 誰かが視聴しています', 'live');
+      call.on('close', () => setStatus('待機中(合言葉: ' + roomId + ')', 'live'));
+    });
+
+    peer.on('error', (err) => {
+      if (err.type === 'unavailable-id') {
+        setStatus('その合言葉は使用中です。別の文字列にしてください', 'error');
+      } else {
+        setStatus('エラー: ' + err.type, 'error');
+      }
+    });
+
+    peer.on('disconnected', () => {
+      setStatus('切断されました。再接続中...', 'error');
+      setTimeout(() => { if (peer && !peer.destroyed) peer.reconnect(); }, 2000);
+    });
+
+    roomIdInput.disabled = true;
+    facingSelect.disabled = true;
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'block';
+  }
+
+  function stop() {
+    if (peer) { peer.destroy(); peer = null; }
+    if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+    preview.style.display = 'none';
+    roomIdInput.disabled = false;
+    facingSelect.disabled = false;
+    startBtn.style.display = 'block';
+    stopBtn.style.display = 'none';
+    setStatus('未開始');
+  }
+
+  startBtn.addEventListener('click', start);
+  stopBtn.addEventListener('click', stop);
+</script>
+</body>
+</html>
